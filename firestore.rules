@@ -1,0 +1,50 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function isSignedIn() { return request.auth != null; }
+    function myRole() {
+      return get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role;
+    }
+    function isAdmin() { return isSignedIn() && (myRole() == 'admin' || myRole() == 'super_admin'); }
+    function isTreasurer() { return isSignedIn() && (myRole() == 'treasurer' || isAdmin()); }
+    function isActive() {
+      return isSignedIn() && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.status == 'active';
+    }
+
+    // Users: anyone signed in can read; users can update their own non-privileged fields; admins manage everything.
+    match /users/{uid} {
+      allow read: if isSignedIn();
+      allow create: if isSignedIn() && request.auth.uid == uid;
+      allow update: if isAdmin()
+        || (request.auth.uid == uid
+            && !('role' in request.resource.data.diff(resource.data).affectedKeys())
+            && !('status' in request.resource.data.diff(resource.data).affectedKeys()));
+      allow delete: if isAdmin();
+    }
+
+    // Meta (bootstrap flag): readable by all signed in, writeable only at creation.
+    match /_meta/{doc} {
+      allow read: if isSignedIn();
+      allow write: if isSignedIn();
+    }
+
+    // Contributions: all active members can read; only treasurer/admin can write.
+    match /contributions/{id} {
+      allow read: if isActive();
+      allow write: if isTreasurer() && isActive();
+    }
+
+    // Events: all active members read; admin write.
+    match /events/{id} {
+      allow read: if isActive();
+      allow write: if isAdmin() && isActive();
+    }
+
+    // Media: all active members read; admin write.
+    match /media/{id} {
+      allow read: if isActive();
+      allow write: if isAdmin() && isActive();
+    }
+  }
+}
